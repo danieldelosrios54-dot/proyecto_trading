@@ -1,0 +1,19 @@
+# Datos de ticks: 7,3 GB, no caben en GitHub
+proyecto/entrada/data_ticks/
+
+# Archivos generados: se regeneran con python main.py validar | medir | simular | principal
+proyecto/salida/
+
+# Entorno de Python y cachés
+.venv/
+**/__pycache__/
+.pytest_cache/
+*.pyc
+
+# Configuración local de Claude Code
+.claude/
+
+# Temporales
+~$*.xlsx
+*.tmp
+*.tmp.xlsx
