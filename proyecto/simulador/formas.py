@@ -11,7 +11,7 @@ import time
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import numpy as np
 
@@ -25,7 +25,8 @@ from simulador.datos import LADO, Calendario, Conjunto, al_azar, calendario, com
 from simulador.estado_formas import CANDIDATA, DESCARTADA, NO_APLICA, NO_MEDIDA, OBSERVACION, Evaluacion, decidir
 from simulador.operaciones import Minutos, Operacion, crear_operacion
 from simulador.posiciones import orden_con_prioridad, tomar
-from simulador.principal import _indicadores, _serie_de_dia
+from simulador.principal import _conteos, _indicadores, _serie_de_dia
+from simulador.principal_escenarios import _RENOMBRE, COLUMNAS_20
 from simulador.indicadores import indicadores_serie
 from simulador.reportes import escribir_libro
 from simulador.velas_sesion import cargar_velas
@@ -34,6 +35,20 @@ from validacion.modelos import Senal, clave_fecha, ns_del_dia
 _NS_MIN = 60_000_000_000
 _USD = config.USD_POR_TICK
 REF = config.ESCENARIO_FORMAS  # (distancia, colocación ms, deslizamiento, minutos)
+_NOMBRE_MES = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+               9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"}
+
+# Datos del escenario que se está midiendo, para las columnas del entregable de cada combinación.
+# `base()` los fija cada vez que arma las operaciones de un escenario (las evaluaciones van justo después).
+CONTEXTO: dict = {"meses": None, "nombres_meses": [], "n_dias": 0, "fechas": [], "conteos": (0, 0)}
+
+
+def meses_de_semanas(semanas: list[date]) -> tuple[np.ndarray, list[str]]:
+    """Índice de mes de cada semana y nombres de los meses. Cada semana va al mes de su miércoles
+    (29 jun – 31 jul = julio, 3 – 28 ago = agosto, 31 ago – 2 oct = septiembre)."""
+    claves = [(d + timedelta(days=2)).year * 12 + (d + timedelta(days=2)).month for d in semanas]
+    orden = sorted(set(claves))
+    return np.array([orden.index(k) for k in claves], dtype=int), [_NOMBRE_MES[(k - 1) % 12 + 1] for k in orden]
 
 
 # ---- datos de cada operación ---------------------------------------------------------------------
@@ -64,6 +79,9 @@ def base(mediciones: list[Medicion], dias: dict[str, Dia], cal: Calendario, **kw
     c = conjunto(operaciones(mediciones, dias, **kw), dias, cal)
     meds = {m.senal.fila: m for m in mediciones}
     signo = np.array([1 if o.tipo == "Buy" else -1 for o in c.ops])
+    meses, nombres_meses = meses_de_semanas(cal.semanas)
+    CONTEXTO.update(meses=meses, nombres_meses=nombres_meses, n_dias=len(cal.dias),
+                    fechas=[date(int(d[:4]), int(d[4:6]), int(d[6:])) for d in cal.dias], conteos=_conteos(mediciones, lambda m: True))
     return Base(c, meds, signo)
 
 
@@ -107,6 +125,7 @@ def evaluar(c: Conjunto, valores, salida, tomada, nsem: int, lado: int | None = 
     else:
         texto, vecinas = str(mas), None
     top = resumen_top(s, v, salida, tomada, lado if nombres is None else None, nombres=nombres, elegidas=fuera.elegidas)
+    _columnas_consistentes(top["por_combinacion"], c, v, salida, tomada, lado if nombres is None else None)
     return Evaluacion(dentro, fuera, s.neto[np.arange(nsem), fuera.elegidas], caida, texto, vecinas if lado and nombres is None else None, top)
 
 
@@ -127,6 +146,11 @@ def resumen_top(s: mt.Semanal, valores, salida, tomada, lado: int | None, n: int
     perdida = s.perdida.sum(0)[top]
     pf = np.divide(s.ganancia.sum(0)[top], perdida, out=np.full(len(top), np.nan), where=perdida > 0)
     vecinas = mt.combinaciones_vecinas(total, lado)[top] if lado else None
+    meses = CONTEXTO["meses"]
+    if meses is not None and len(meses) == s.neto.shape[0]:
+        por_mes = np.vstack([s.neto[meses == k].sum(0) for k in range(int(meses.max()) + 1)])
+    else:
+        por_mes = np.empty((0, len(total)))
     return {
         "combinaciones": int(len(total)), "positivas": int((total > 0).sum()),
         "ambas_todas": int(((total > 0) & (primera > 0) & (segunda > 0)).sum()),
@@ -137,9 +161,39 @@ def resumen_top(s: mt.Semanal, valores, salida, tomada, lado: int | None, n: int
         "vecinas": None if vecinas is None else int((vecinas > 0).sum()), "n": int(len(top)),
         "por_combinacion": {
             "total": total.astype(np.float32), "primera": primera.astype(np.float32), "segunda": segunda.astype(np.float32),
+            "meses": por_mes.astype(np.float32), "nombres_meses": list(CONTEXTO["nombres_meses"]) if len(por_mes) else [],
             "lado": lado, "nombres": nombres, "elegidas": [] if elegidas is None else [int(e) for e in elegidas],
         },
     }
+
+
+def consistente(pc: dict) -> np.ndarray:
+    """Combinaciones que ganan en el total, en ambas mitades y en cada mes de un escenario."""
+    ok = (pc["total"] > 0) & (pc["primera"] > 0) & (pc["segunda"] > 0)
+    meses = pc.get("meses")
+    if meses is not None and len(meses):
+        ok &= (meses > 0).all(0)
+    return ok
+
+
+def _columnas_consistentes(pc: dict, c: Conjunto, valores, salida, tomada, lado: int | None) -> None:
+    """Columnas del entregable (COLUMNAS_20) de las combinaciones consistentes en este escenario.
+
+    Solo esas pueden ser utilizables en su grupo, así que solo se guardan esas (ahorra memoria).
+    """
+    indices = np.flatnonzero(consistente(pc))
+    pc["columnas"] = {"indices": indices}
+    if not len(indices) or not len(c):
+        return
+    invalidas, no_ej = CONTEXTO["conteos"]
+    base_cols = mt.columnas(valores[:, indices], salida[:, indices], tomada[:, indices], c.entrada_ns, c.hora_utc_ns, c.dia,
+                            max(CONTEXTO["n_dias"], int(c.dia.max()) + 1), invalidas, no_ej, True)
+    for nombre in COLUMNAS_20:
+        if nombre == "Combinaciones Vecinas":
+            valor = mt.combinaciones_vecinas(pc["total"].astype(np.float64), lado)[indices] if lado else np.full(len(indices), np.nan)
+        else:
+            valor = base_cols[_RENOMBRE.get(nombre, nombre)]
+        pc["columnas"][nombre] = np.asarray(valor)
 
 
 def evaluar_por_operacion(c: Conjunto, elegido_fuera: np.ndarray, elegido_dentro: np.ndarray, valores, salida, nsem: int, solape: bool, signo) -> Evaluacion:

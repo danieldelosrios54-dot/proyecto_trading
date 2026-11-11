@@ -10,7 +10,8 @@ from numpy.lib.stride_tricks import sliding_window_view
 from medicion.analisis import Tabla
 from simulador.datos import combinacion
 from simulador.estado_formas import CANDIDATA, DESCARTADA, ESTADOS, NO_MEDIDA, OBSERVACION, consistencia, proporcion_ambas
-from simulador.formas import REF, _USD
+from simulador.formas import CONTEXTO, REF, _USD, consistente
+from simulador.principal_escenarios import COLUMNAS_20
 
 POR_QUE = "Por qué (motivo del estado)"
 ENCABEZADOS = [
@@ -42,10 +43,12 @@ GRUPOS_ENCABEZADOS = [
     "Fuera de muestra mínimo (USD)", "Fuera de muestra máximo (USD)", "% de positivas que ganan en ambas mitades",
     "Mejor escenario", "Combinaciones utilizables", "Combinación de referencia del grupo", "Elecciones fuera de muestra dentro de la zona",
 ]
-UTILIZABLES_ENCABEZADOS = [
-    "Grupo", "SL (USD)", "TP (USD)", "Parámetro", "Escenarios candidatos", "Neto mínimo (USD)", "Neto promedio (USD)",
-    "Neto máximo (USD)", "Peor mitad mínima (USD)", "Vecinas utilizables",
-]
+UTILIZABLES_BASE = ["Grupo", "Escenario", "SL (ticks)", "TP (ticks)", "SL (USD)", "TP (USD)", "Parámetro", *COLUMNAS_20,
+                    "1ª mitad (USD)", "2ª mitad (USD)"]
+
+
+def utilizables_encabezados(nombres_meses: list[str]) -> list[str]:
+    return [*UTILIZABLES_BASE, *[f"{m} (USD)" for m in nombres_meses]]
 _REFERENCIA = f"Igual que la referencia: orden a ±{REF[0]} ticks, colocación en {REF[1]} ms, deslizamiento de {REF[2]}, cierre a {REF[3]} min, ATM fijo, todas las señales"
 
 
@@ -106,14 +109,14 @@ def _vecinas(ok: np.ndarray, lado: int) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _sin_zona(texto: str, elecciones=None) -> dict:
-    return {"texto": texto, "referencia": None, "elecciones": elecciones, "filas": []}
+    return {"texto": texto, "referencia": None, "elecciones": elecciones, "ok": None}
 
 
 def utilizables(evaluaciones: list) -> dict:
-    """Combinaciones que ganan en el total y en ambas mitades en todos los escenarios candidatos de un grupo.
+    """Combinaciones que ganan en el total, en ambas mitades y en cada mes en todos los escenarios candidatos de un grupo.
 
     `evaluaciones`: las de los escenarios Candidata del grupo. Devuelve "texto" (resumen), "referencia" (la de mayor
-    neto mínimo), "elecciones" (elecciones fuera de muestra dentro de la zona) y "filas" (detalle por combinación).
+    neto mínimo), "elecciones" (elecciones fuera de muestra dentro de la zona) y "ok" (máscara de utilizables).
     """
     if not evaluaciones:
         return _sin_zona("No aplica: ningún escenario del grupo es candidato.")
@@ -123,28 +126,19 @@ def utilizables(evaluaciones: list) -> dict:
     if len({len(pc["total"]) for pc in pcs}) > 1:
         return _sin_zona("No aplica: sus candidatas usan tablas de combinaciones distintas.")
     total = np.vstack([pc["total"] for pc in pcs]).astype(float)
-    primera = np.vstack([pc["primera"] for pc in pcs]).astype(float)
-    segunda = np.vstack([pc["segunda"] for pc in pcs]).astype(float)
-    ok = ((total > 0) & (primera > 0) & (segunda > 0)).all(0)
+    ok = np.vstack([consistente(pc) for pc in pcs]).all(0)
     n, k = int(ok.sum()), len(pcs)
     elegidas = [e for pc in pcs for e in pc["elegidas"]]
     dentro = sum(bool(ok[e]) for e in elegidas)
     elecciones = f"{dentro} de {len(elegidas)} ({100 * dentro / len(elegidas):.0f} %)" if elegidas else None
     escenarios = f"en las {k} candidatas del grupo" if k > 1 else "en su candidata"
     if n == 0:
-        return _sin_zona(f"Ninguna: no hay combinación que gane en el total y en ambas mitades {escenarios}.", elecciones)
+        return _sin_zona(f"Ninguna: no hay combinación que gane en el total, en ambas mitades y en cada mes {escenarios}.", elecciones)
     pc0 = pcs[0]
-    minimo, promedio, maximo = total.min(0), total.mean(0), total.max(0)
-    peor_mitad = np.minimum(primera, segunda).min(0)
+    minimo = total.min(0)
     vec, existen = _vecinas(ok, pc0["lado"]) if pc0["lado"] else (None, None)
     indices = np.flatnonzero(ok)
-    indices = indices[np.argsort(-minimo[indices], kind="stable")]
-    filas = []
-    for i in indices:
-        sl, tp, parametro = _etiqueta(pc0, i)
-        filas.append([sl, tp, parametro, k, round(float(minimo[i]), 2), round(float(promedio[i]), 2), round(float(maximo[i]), 2),
-                      round(float(peor_mitad[i]), 2), None if vec is None else f"{vec[i]} de {existen[i]}"])
-    mejor = int(indices[0])
+    mejor = int(indices[np.argmax(minimo[indices])])
     sl, tp, parametro = _etiqueta(pc0, mejor)
     nombre_mejor = f"SL {_num(sl)} / TP {_num(tp)} USD" if parametro is None else parametro
     referencia = f"{nombre_mejor}; neto mínimo entre escenarios {_usd(minimo[mejor])} USD" + (
@@ -155,11 +149,66 @@ def utilizables(evaluaciones: list) -> dict:
         texto = f"{_miles(n)} de {_miles(len(ok))} combinaciones {escenarios}: SL entre {_num(min(sls))} y {_num(max(sls))} USD, TP entre {_num(min(tps))} y {_num(max(tps))} USD."
     else:
         texto = f"{_miles(n)} de {_miles(len(ok))} combinaciones {escenarios}."
-    return {"texto": texto, "referencia": referencia, "elecciones": elecciones, "filas": filas}
+    return {"texto": texto, "referencia": referencia, "elecciones": elecciones, "ok": ok}
 
 
-def tabla_grupos(registros: list[dict]) -> tuple[list[list], list[list]]:
-    """Filas de las pestañas "Grupos" y "Combinaciones utilizables"."""
+_TIEMPOS = {"Hora Entrada", "Ventana Ejecucion", "Prom. Tiempo Abierta"}
+
+
+def _valor(nombre: str, v):
+    """Valor de una columna del entregable listo para Excel."""
+    if nombre == "Fecha Peor Dia":
+        fechas = CONTEXTO["fechas"]
+        return fechas[int(v)] if 0 <= int(v) < len(fechas) else None
+    if isinstance(v, (float, np.floating)):
+        if np.isnan(v):
+            return None
+        return float(v) if nombre in _TIEMPOS else round(float(v), 2)  # los tiempos son fracciones de día: no se redondean
+    return int(v) if isinstance(v, (int, np.integer)) else v
+
+
+def _filas_detalle(nombre_grupo: str, candidatas: list[dict], ok: np.ndarray, n_meses: int) -> list[list]:
+    """Una fila por combinación utilizable y escenario candidato, con los resultados de ese escenario."""
+    filas = []
+    for reg in candidatas:  # ya vienen por Fuera de muestra, de mayor a menor
+        ev = reg["_ev"]
+        pc = ev.top.get("por_combinacion") if ev is not None and ev.top else None
+        cols = pc.get("columnas") if pc else None
+        if not cols:
+            continue
+        posicion = {int(i): k for k, i in enumerate(cols["indices"])}
+        del_escenario = []
+        for i in np.flatnonzero(ok):
+            k = posicion.get(int(i))
+            if k is None:
+                continue
+            if pc["lado"]:
+                sl_t, tp_t = combinacion(int(i))
+                inicio = [sl_t, tp_t, sl_t * _USD, tp_t * _USD, None]
+            else:
+                inicio = [None, None, None, None, pc["nombres"][i] if pc["nombres"] else str(i)]
+            meses = [round(float(x), 2) for x in pc["meses"][:, i]] if len(pc.get("meses", [])) else []
+            meses += [None] * (n_meses - len(meses))
+            del_escenario.append([nombre_grupo, reg["Escenario"], *inicio, *[_valor(n, cols[n][k]) for n in COLUMNAS_20],
+                                  round(float(pc["primera"][i]), 2), round(float(pc["segunda"][i]), 2), *meses])
+        ganancia = 7 + COLUMNAS_20.index("Ganancia Neta")
+        del_escenario.sort(key=lambda f: -(f[ganancia] if f[ganancia] is not None else -np.inf))
+        filas.extend(del_escenario)
+    return filas
+
+
+def _nombres_meses(registros: list[dict]) -> list[str]:
+    for reg in registros:
+        ev = reg["_ev"]
+        pc = ev.top.get("por_combinacion") if ev is not None and ev.top else None
+        if pc and pc.get("nombres_meses"):
+            return pc["nombres_meses"]
+    return []
+
+
+def tabla_grupos(registros: list[dict]) -> tuple[list[list], list[list], list[str]]:
+    """Filas de las pestañas "Grupos" y "Combinaciones utilizables" y los nombres de los meses."""
+    nombres_meses = _nombres_meses(registros)
     por_grupo = defaultdict(list)
     for reg in registros:
         por_grupo[reg["Grupo"]].append(reg)
@@ -180,9 +229,9 @@ def tabla_grupos(registros: list[dict]) -> tuple[list[list], list[list]]:
             mejor, zona["texto"], zona["referencia"], zona["elecciones"],
         ])
         orden.append((0 if n_cand else (1 if n_obs else 2), -(max(fueras) if fueras else -np.inf)))
-        detalle[nombre] = [[nombre, *f] for f in zona["filas"]]
+        detalle[nombre] = [] if zona["ok"] is None else _filas_detalle(nombre, candidatas, zona["ok"], len(nombres_meses))
     filas = [f for _, f in sorted(zip(orden, filas), key=lambda x: x[0])]
-    return filas, [d for f in filas for d in detalle[f[0]]]
+    return filas, [d for f in filas for d in detalle[f[0]]], nombres_meses
 
 
 # ---- tabla principal -------------------------------------------------------------------------------------
@@ -255,7 +304,7 @@ def tablas(filas, mapa, ref_fuera: float, ref_top: dict | None = None) -> list[T
         registros.append(_fila(nombre, "Mapa de reglas", descripcion + (" (igual que la referencia)" if es_ref else ""), ev, estado, argumento, ref_fuera, ref_top, ms, es_ref))
     registros.sort(key=lambda r: r["_orden"])
     filas_tabla = [[i, *[r[k] for k in ENCABEZADOS[1:]]] for i, r in enumerate(registros, 1)]
-    filas_grupos, filas_utilizables = tabla_grupos(registros)
+    filas_grupos, filas_utilizables, nombres_meses = tabla_grupos(registros)
     ideas_candidatas = sum(1 for f in filas_grupos if f[2])
     cuenta = {e: sum(r["Estado"] == e for r in registros) for e in ESTADOS}
     como_leer = Tabla("Cómo leer el resumen", ["Columna", "Qué significa"], [
@@ -278,12 +327,13 @@ def tablas(filas, mapa, ref_fuera: float, ref_top: dict | None = None) -> list[T
         ["No Medida", "Falta un dato para medirla; el motivo dice cuál y cómo conseguirlo."],
         [POR_QUE, "El motivo del estado con sus números. En las candidatas, un aviso si es una variante de otra (misma idea con otros parámetros) para no contarla dos veces al armar la Matriz."],
         ["Pestaña Grupos", "Una fila por idea: cuántos escenarios tiene en cada estado, su rango de Fuera de muestra, su mejor escenario y su zona de combinaciones utilizables."],
-        ["Combinaciones utilizables", "Por grupo: las combinaciones SL/TP (o de parámetros) que ganan en el total de las 14 semanas y en ambas mitades en TODOS los escenarios candidatos del grupo. Es la zona de ATM que funciona venga la variante que venga. Se eligen mirando las 14 semanas, así que son optimistas, como el top 20."],
+        ["Combinaciones utilizables", "Por grupo: las combinaciones SL/TP (o de parámetros) que ganan en el total de las 14 semanas, en ambas mitades (semanas 1–7 y 8–14) y en cada mes, en TODOS los escenarios candidatos del grupo. Es la zona de ATM que funciona venga la variante que venga. Se eligen mirando las 14 semanas, así que son optimistas, como el top 20."],
+        ["Meses", "Cada semana (lunes a viernes) va al mes de su miércoles: julio = 29 jun – 31 jul (5 semanas), agosto = 3 – 28 ago (4), septiembre = 31 ago – 2 oct (5)."],
         ["Combinación de referencia del grupo", "De las utilizables, la de mayor neto mínimo entre los escenarios del grupo (la que mejor aguanta en su peor escenario), con cuántas de sus vecinas en la cuadrícula SL × TP también son utilizables: si son todas, está en el centro de la zona y no en un borde."],
         ["Elecciones fuera de muestra dentro de la zona", "Prueba de honestidad: de las combinaciones que el método eligió sin ver cada semana (14 por escenario candidato), cuántas caen dentro de la zona utilizable. Si casi todas caen dentro, la zona es la que se elige también sin mirar el resultado."],
-        ["Pestaña Combinaciones utilizables", "El detalle de cada zona: una fila por combinación utilizable, con su neto mínimo, promedio y máximo entre los escenarios candidatos del grupo, su peor mitad y sus vecinas utilizables. Filtra por Grupo para ver la forma de la zona."],
+        ["Pestaña Combinaciones utilizables", "Una fila por combinación utilizable y escenario candidato de su grupo, con los resultados de ESE escenario: las columnas del entregable (Ganancia Neta, Profit Factor, Drawdown…), las dos mitades y cada mes. Una combinación se repite en cada escenario candidato de su grupo (columnas Grupo y Escenario). Orden: por grupo (como en la pestaña Grupos), por escenario (Fuera de muestra de mayor a menor) y por Ganancia Neta. Filtra por SL y TP para ver una combinación en todos los escenarios de su grupo."],
         ["Límite", "Una meseta o una zona es un argumento de robustez a los parámetros con los mismos datos (703 señales, 14 semanas). No prueba que la idea funcione en semanas nuevas."],
         ["Celdas vacías", "Las formas que eligen un ATM por grupo, por semana o dentro del día no tienen una tabla de combinaciones: solo tienen Fuera de muestra. Las No Medida no tienen números."],
     ])
     return [Tabla("Resumen escenarios", ENCABEZADOS, filas_tabla), Tabla("Grupos", GRUPOS_ENCABEZADOS, filas_grupos),
-            Tabla("Combinaciones utilizables", UTILIZABLES_ENCABEZADOS, filas_utilizables), como_leer]
+            Tabla("Combinaciones utilizables", utilizables_encabezados(nombres_meses), filas_utilizables), como_leer]

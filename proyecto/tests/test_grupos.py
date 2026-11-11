@@ -1,11 +1,14 @@
 """Grupos de escenarios y zona de combinaciones utilizables por grupo."""
 
+from datetime import date
+
 import numpy as np
 
 from simulador import metricas as mt
 from simulador.datos import LADO
 from simulador.estado_formas import CANDIDATA, DESCARTADA, OBSERVACION, Evaluacion
-from simulador.formas import Fila
+from simulador.formas import Fila, consistente, meses_de_semanas
+from simulador.principal_escenarios import COLUMNAS_20
 from simulador.resumen_escenarios import GRUPO_REFERENCIA, GRUPO_SIN_TREND_V, GRUPOS_ENCABEZADOS, grupo, tablas, utilizables
 
 
@@ -36,8 +39,7 @@ def test_utilizables_exige_ganar_en_ambas_mitades_en_todas_las_candidatas():
     e2 = _ev_combinaciones([90, 70, 40], [50, -10, 10], [40, 80, 30], nombres=nombres, elegidas=[1, 1, 0, 0])
     zona = utilizables([e1, e2])
     assert zona["texto"] == "2 de 3 combinaciones en las 2 candidatas del grupo."  # B pierde la 1ª mitad en e2
-    assert [f[2] for f in zona["filas"]] == ["A", "C"]  # ordenadas por neto mínimo
-    assert zona["filas"][0][4] == 90 and zona["filas"][0][7] == 40  # neto mínimo y peor mitad mínima de A
+    assert zona["ok"].tolist() == [True, False, True]
     assert zona["referencia"] == "A; neto mínimo entre escenarios +90 USD"
     assert zona["elecciones"] == "5 de 8 (62 %)"  # elegidas dentro de la zona: 0,2,0 en e1 y 0,0 en e2
 
@@ -82,5 +84,49 @@ def test_pestana_grupos_cuenta_por_idea():
     assert v[9] == "Dejar de operar V"  # mejor escenario entre sus candidatas
     assert v[10] == "1 de 3 combinaciones en las 2 candidatas del grupo."  # solo "x" gana en ambas candidatas
     assert grupos.filas[1][0] == "Salir si no reacciona" and grupos.filas[1][10].startswith("No aplica: ningún escenario")
-    detalle = pestanas[2]
-    assert [f[0] for f in detalle.filas] == ["Dejar de operar V"] and detalle.filas[0][3] == "x"
+    assert pestanas[2].filas == []  # sin columnas guardadas no hay detalle
+
+
+def test_meses_por_el_miercoles_de_cada_semana():
+    semanas = [date(2026, 6, 29), date(2026, 7, 27), date(2026, 8, 3), date(2026, 8, 24), date(2026, 8, 31), date(2026, 9, 28)]
+    meses, nombres = meses_de_semanas(semanas)
+    assert meses.tolist() == [0, 0, 1, 1, 2, 2] and nombres == ["Julio", "Agosto", "Septiembre"]
+
+
+def test_perder_un_mes_deja_de_ser_utilizable():
+    pc = {"total": np.array([100.0, 100.0]), "primera": np.array([50.0, 50.0]), "segunda": np.array([50.0, 50.0]),
+          "meses": np.array([[40.0, 60.0], [30.0, 50.0], [30.0, -10.0]])}  # la segunda pierde septiembre
+    assert consistente(pc).tolist() == [True, False]
+
+
+def test_detalle_una_fila_por_combinacion_y_escenario_candidato():
+    def ev(neto, pos):
+        cal = mt.Calificacion(neto, 100, 1.2, 8, neto / 2, neto / 2, ())
+        arr = np.array(pos, np.float32)
+        columnas = {"indices": np.array([0, 1, 2])}
+        columnas.update({n: np.array([float(neto + k) for k in range(3)]) for n in COLUMNAS_20})
+        columnas["Fecha Peor Dia"] = np.array([-1, -1, -1])
+        top = {"combinaciones": 3, "positivas": 2, "ambas_todas": 1, "ganancia": 1.0, "mitad1": 1.0, "mitad2": 1.0, "ambas": 1, "caida": 1.0,
+               "operaciones": 1.0, "vecinas": None, "n": 3,
+               "por_combinacion": {"total": arr, "primera": arr, "segunda": arr, "meses": np.vstack([arr, arr, arr]),
+                                   "nombres_meses": ["Julio", "Agosto", "Septiembre"], "lado": None, "nombres": ["x", "y", "z"],
+                                   "elegidas": [0], "columnas": columnas}}
+        return Evaluacion(cal, cal, np.zeros(14), 1.0, "", None, top)
+    filas = [
+        Fila("4", "Selección", "Dejar de operar V", ev(3000, [5, 5, -5]), estado=CANDIDATA, argumento="Positiva."),
+        Fila("4", "Selección", "Dejar de operar V en Te 1 (25 señales)", ev(2000, [5, -5, 5]), estado=CANDIDATA, argumento="Positiva."),
+    ]
+    detalle = tablas(filas, [], 3000.0)[2]
+    assert detalle.encabezados[:7] == ["Grupo", "Escenario", "SL (ticks)", "TP (ticks)", "SL (USD)", "TP (USD)", "Parámetro"]
+    assert detalle.encabezados[-3:] == ["Julio (USD)", "Agosto (USD)", "Septiembre (USD)"]
+    # solo "x" es utilizable en el grupo: una fila por cada escenario candidato, con los resultados de ese escenario
+    assert [(f[1], f[6]) for f in detalle.filas] == [("Dejar de operar V", "x"), ("Dejar de operar V en Te 1 (25 señales)", "x")]
+    ganancia = detalle.encabezados.index("Ganancia Neta")
+    assert [f[ganancia] for f in detalle.filas] == [3000.0, 2000.0]
+    assert detalle.filas[0][detalle.encabezados.index("Fecha Peor Dia")] is None
+
+
+def test_columnas_de_tiempo_no_se_redondean():
+    from simulador.resumen_escenarios import _valor
+    assert _valor("Prom. Tiempo Abierta", np.float64(0.0034)) == 0.0034  # unos 5 minutos como fracción de día
+    assert _valor("Profit Factor", np.float64(1.2345)) == 1.23

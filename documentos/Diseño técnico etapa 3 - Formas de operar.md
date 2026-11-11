@@ -229,18 +229,29 @@ Muchas filas del resumen son variantes de la misma idea (mesetas). Para contar *
 - % de positivas que ganan en ambas mitades;
 - mejor escenario;
 - y tres columnas de combinaciones:
-  - **Combinaciones utilizables:** las combinaciones SL/TP (o de parámetros) que ganan en el total y en ambas mitades en **todos los escenarios Candidata del grupo**. Es la zona de ATM que funciona venga la variante que venga. Si el grupo no tiene candidatas o sus candidatas no tienen tabla de combinaciones, "No aplica".
+  - **Combinaciones utilizables:** las combinaciones SL/TP (o de parámetros) que ganan en el total, en ambas mitades **y en cada mes** en **todos los escenarios Candidata del grupo**. Es la zona de ATM que funciona venga la variante que venga. Si el grupo no tiene candidatas o sus candidatas no tienen tabla de combinaciones, "No aplica".
   - **Combinación de referencia del grupo:** de las utilizables, la de mayor neto mínimo entre los escenarios del grupo, con cuántas de sus vecinas en la cuadrícula SL × TP también son utilizables.
   - **Elecciones fuera de muestra dentro de la zona:** de las combinaciones elegidas sin ver cada semana (14 por candidata), cuántas caen dentro de la zona. Es la prueba de que la zona no es solo optimismo de mirar las 14 semanas.
 
-**Pestaña "Combinaciones utilizables":** el detalle de cada zona, con una fila por combinación:
-- neto mínimo, promedio y máximo entre las candidatas del grupo;
-- peor mitad mínima;
-- vecinas utilizables.
+**Meses:** cada semana (lunes a viernes) va al mes de su miércoles:
+- julio: 29 jun – 31 jul (5 semanas);
+- agosto: 3 – 28 ago (4 semanas);
+- septiembre: 31 ago – 2 oct (5 semanas).
+
+**Pestaña "Combinaciones utilizables":** una fila por **combinación utilizable × escenario candidato de su grupo**. La combinación se repite en cada escenario candidato de su grupo, siempre con los resultados de **ese** escenario. Columnas:
+- Grupo y Escenario;
+- SL y TP, en ticks y en USD; las formas con otra tabla de parámetros, como "Stop al cierre de vela", llevan la columna "Parámetro" en su lugar;
+- las columnas del entregable principal (`COLUMNAS_20`: Ganancia Neta, Profit Factor, Drawdown…);
+- la 1ª y la 2ª mitad, y cada mes.
+
+Va ordenada por grupo (como en la pestaña Grupos), luego por escenario (Fuera de muestra de mayor a menor) y luego por Ganancia Neta. Para ver una combinación en todos los escenarios de su grupo, se filtra por SL y TP.
 
 **Límite:** una meseta o una zona es un argumento de robustez a los parámetros con los mismos datos. No prueba que la idea funcione en semanas nuevas.
 
 **Código:**
-- `formas.resumen_top` guarda por combinación el neto total y por mitad, sus etiquetas y las elecciones fuera de muestra (`por_combinacion`).
+- `formas.resumen_top` guarda por combinación el neto total, por mitad y por mes, sus etiquetas y las elecciones fuera de muestra (`por_combinacion`).
+- `formas.meses_de_semanas` asigna cada semana a su mes.
+- `formas.consistente` marca las combinaciones que ganan en el total, en las mitades y en cada mes de un escenario.
+- `_columnas_consistentes` guarda las columnas del entregable solo de esas combinaciones. Solo ellas pueden ser utilizables, así que se ahorra memoria. Revision Invalida y No Ejecutadas salen de las mediciones de cada escenario.
 - `resumen_escenarios.grupo`, `utilizables` y `tabla_grupos` arman las pestañas.
 - Pruebas en `tests/test_grupos.py`.
