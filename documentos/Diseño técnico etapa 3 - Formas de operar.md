@@ -209,3 +209,38 @@ Formas candidatas: la referencia; dejar de operar Trend ≥ 2do Pivot (y su vari
 - `simulador/matriz_recomendada.py`: pestaña Matriz recomendada y aviso de no candidatas.
 - Pruebas: `tests/test_formas.py`, `tests/test_resumen_escenarios.py`, `tests/test_matriz_recomendada.py`.
 - Tiempo real de `python main.py formas`: unos 10 minutos.
+
+### 8.7 Grupos de escenarios y combinaciones utilizables
+Muchas filas del resumen son variantes de la misma idea (mesetas). Para contar **ideas** y no filas al armar la Matriz principal:
+
+**Columna "Grupo"** en "Resumen escenarios". Se asigna por reglas fijas sobre el nombre (`resumen_escenarios.grupo`):
+
+| Escenarios | Grupo |
+|---|---|
+| "ATM fijo (referencia)" y las filas del mapa con zonas "Todas" | Referencia y su meseta |
+| Filas del mapa "Sin Trend ≥ 2do Pivot ni V" y "Dejar de operar Trend ≥ 2do Pivot y V" | Sin Trend ≥ 2do Pivot ni V y su meseta |
+| "Dejar de operar X" y sus variantes "en Te 1/2" | Dejar de operar X |
+| Variantes de parámetros de un mismo mecanismo (corte temprano, cierre condicionado, breakeven, stop límite, varias posiciones, separación mínima, órdenes lejanas, pausa, ATM por zona, prioridad, ventana, deslizamiento) | Un grupo por mecanismo |
+| El resto (incluidos los filtros por indicador y por columna M, que quitan señales distintas) | Su propio nombre |
+
+**Pestaña "Grupos":** una fila por idea con:
+- escenarios por estado;
+- Fuera de muestra mínimo y máximo;
+- % de positivas que ganan en ambas mitades;
+- mejor escenario;
+- y tres columnas de combinaciones:
+  - **Combinaciones utilizables:** las combinaciones SL/TP (o de parámetros) que ganan en el total y en ambas mitades en **todos los escenarios Candidata del grupo**. Es la zona de ATM que funciona venga la variante que venga. Si el grupo no tiene candidatas o sus candidatas no tienen tabla de combinaciones, "No aplica".
+  - **Combinación de referencia del grupo:** de las utilizables, la de mayor neto mínimo entre los escenarios del grupo, con cuántas de sus vecinas en la cuadrícula SL × TP también son utilizables.
+  - **Elecciones fuera de muestra dentro de la zona:** de las combinaciones elegidas sin ver cada semana (14 por candidata), cuántas caen dentro de la zona. Es la prueba de que la zona no es solo optimismo de mirar las 14 semanas.
+
+**Pestaña "Combinaciones utilizables":** el detalle de cada zona, con una fila por combinación:
+- neto mínimo, promedio y máximo entre las candidatas del grupo;
+- peor mitad mínima;
+- vecinas utilizables.
+
+**Límite:** una meseta o una zona es un argumento de robustez a los parámetros con los mismos datos. No prueba que la idea funcione en semanas nuevas.
+
+**Código:**
+- `formas.resumen_top` guarda por combinación el neto total y por mitad, sus etiquetas y las elecciones fuera de muestra (`por_combinacion`).
+- `resumen_escenarios.grupo`, `utilizables` y `tabla_grupos` arman las pestañas.
+- Pruebas en `tests/test_grupos.py`.

@@ -106,12 +106,15 @@ def evaluar(c: Conjunto, valores, salida, tomada, nsem: int, lado: int | None = 
         vecinas = float(mt.combinaciones_vecinas(s.total(), lado)[mas])
     else:
         texto, vecinas = str(mas), None
-    top = resumen_top(s, v, salida, tomada, lado if nombres is None else None)
+    top = resumen_top(s, v, salida, tomada, lado if nombres is None else None, nombres=nombres, elegidas=fuera.elegidas)
     return Evaluacion(dentro, fuera, s.neto[np.arange(nsem), fuera.elegidas], caida, texto, vecinas if lado and nombres is None else None, top)
 
 
-def resumen_top(s: mt.Semanal, valores, salida, tomada, lado: int | None, n: int = 20) -> dict:
-    """Cuántas combinaciones ganan y cómo les va a las n de mayor ganancia (mirando todas las semanas)."""
+def resumen_top(s: mt.Semanal, valores, salida, tomada, lado: int | None, n: int = 20, nombres: list[str] | None = None, elegidas=None) -> dict:
+    """Cuántas combinaciones ganan y cómo les va a las n de mayor ganancia (mirando todas las semanas).
+
+    "por_combinacion" guarda el neto de cada combinación (total y por mitad) para la zona utilizable por grupo.
+    """
     total = s.total()
     mitad = s.neto.shape[0] // 2
     primera, segunda = s.neto[:mitad].sum(0), s.neto[mitad:].sum(0)
@@ -132,6 +135,10 @@ def resumen_top(s: mt.Semanal, valores, salida, tomada, lado: int | None, n: int
         "ambas": int(((primera[top] > 0) & (segunda[top] > 0)).sum()),
         "caida": float(caidas.mean()), "pf": float(np.nanmean(pf)), "operaciones": float(ops[top].mean()),
         "vecinas": None if vecinas is None else int((vecinas > 0).sum()), "n": int(len(top)),
+        "por_combinacion": {
+            "total": total.astype(np.float32), "primera": primera.astype(np.float32), "segunda": segunda.astype(np.float32),
+            "lado": lado, "nombres": nombres, "elegidas": [] if elegidas is None else [int(e) for e in elegidas],
+        },
     }
 
 
