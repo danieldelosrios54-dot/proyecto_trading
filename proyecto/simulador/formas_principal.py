@@ -167,7 +167,7 @@ def ejecutar_formas(senales, mediciones, dias, medir, atr_ny, avisar=print) -> d
                  Tabla("Mapa candidatas", ["Distancia (ticks)", "Colocación (ms)", "Cierre (min)", "Zonas", "Operaciones ejecutables", *_ENC_METRICAS, "Percentil frente al azar", "Estado", "Argumento"], mapa_cand)]
     from simulador.resumen_escenarios import COLORES, tablas as tablas_resumen
     mapa_completo = [(d, ms, minutos, zonas, ev, fila[-2], fila[-1]) for (d, ms, minutos, zonas, _, ev), fila in zip(cat.mapa, filas_mapa)]
-    resumen = tablas_resumen(cat.filas, mapa_completo, cat.ref.fuera.neto, cat.ref.top)
+    resumen = tablas_resumen(cat.filas, mapa_completo, cat.ref.fuera.neto, cat.ref.top, avisar)
     escribir_libro(config.REPORTE_RESUMEN_ESCENARIOS, resumen, {"Resumen escenarios": COLORES})
     escribir_libro(config.REPORTE_PROPUESTA_MATRIZ, propuesta)
     from simulador.matriz_recomendada import escribir as escribir_recomendada

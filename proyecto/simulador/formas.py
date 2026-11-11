@@ -558,7 +558,8 @@ class Catalogo:
     def noticias(self) -> None:
         eventos = leer_calendario()
         if not eventos:
-            self.filas.append(Fila("14", "Selección", "No operar en noticias de impacto alto", None, estado=NO_MEDIDA, argumento="Falta el calendario de noticias: entrada/calendario_noticias.csv está vacío. Se mide en cuanto lo completes con las noticias de carpeta roja / 3 estrellas."))
+            self.filas.append(Fila("14", "Selección", "No operar en noticias de impacto alto", None, estado=NO_MEDIDA, argumento="Falta el calendario de noticias: entrada/calendario_noticias.csv está vacío. Se mide en cuanto lo completes con las noticias de carpeta roja / 3 estrellas.",
+                                   cambio={"Selección": "Sin noticias de impacto alto"}))
             return
         c = self.b.c
         dia_op = np.array([o.clave_dia for o in c.ops])

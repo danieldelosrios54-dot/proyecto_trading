@@ -12,6 +12,7 @@ from simulador.datos import combinacion
 from simulador.estado_formas import CANDIDATA, DESCARTADA, ESTADOS, NO_MEDIDA, OBSERVACION, consistencia, proporcion_ambas
 from simulador.formas import CONTEXTO, REF, _USD, consistente
 from simulador.principal_escenarios import COLUMNAS_20
+from simulador.reportes import Resaltado
 
 POR_QUE = "Por qué (motivo del estado)"
 ENCABEZADOS = [
@@ -234,6 +235,138 @@ def tabla_grupos(registros: list[dict]) -> tuple[list[list], list[list], list[st
     return filas, [d for f in filas for d in detalle[f[0]]], nombres_meses
 
 
+# ---- guía de grupos y escenarios -----------------------------------------------------------------------
+
+_QUE_ES = {
+    GRUPO_REFERENCIA: "Tu forma de operar base: orden pendiente a ± ticks del OHLC de la vela, ATM fijo (un SL y un TP), cierre por tiempo y todas las señales. La meseta son las mismas reglas con otra distancia de la orden (±3 a ±7 ticks), otro tiempo de colocación (100 a 600 ms) u otro cierre (7 a 11 min): sirve para ver si el resultado depende de valores exactos.",
+    GRUPO_SIN_TREND_V: "Las mismas reglas de la referencia, pero sin operar las Zonas Reacción Trend ≥ 2do Pivot ni V (las dos que salieron negativas o en empate). Su meseta repite esa selección con otra distancia, colocación y cierre.",
+    "Stop al cierre de vela": "El SL no se mira tick a tick: solo al cierre de cada vela de 1 minuto. Si la vela cierra X ticks o más en contra, se sale a mercado. Dentro de la vela solo protege un stop de catástrofe más lejano. Las combinaciones son (cierre bajo, catástrofe, TP) en vez de SL/TP.",
+    "Pausa por resultado reciente": "Se deja de operar mientras la suma de las últimas N operaciones (10 o 20, reales o virtuales) sea negativa, y se vuelve a operar cuando esa suma vuelve a ser positiva. Mide si conviene frenar en rachas malas.",
+    "No operar órdenes lejanas del cierre de la vela": "No se coloca la orden si su precio queda a más de N ticks (30, 60 o 90) del cierre de la vela de confirmación. Las órdenes lejanas exigen más recorrido; esa distancia se conoce antes de colocar.",
+    "No operar Buy en estructura bajista (B)": "No se operan las compras cuando la columna M (la estructura del mercado que decides al ver la vela de confirmación) es B, bajista. El resto se opera igual que la referencia.",
+    "No operar Sell en estructura alcista (A)": "No se operan las ventas cuando la columna M es A, alcista. El resto se opera igual que la referencia.",
+    "Solo a favor de la estructura (Buy en A, Sell en B; laterales ambas)": "Solo se operan compras en estructura alcista (A) y ventas en bajista (B); en las laterales (LA, LM, LP) se operan las dos.",
+    "Solo contra la estructura (Buy en B, Sell en A; laterales ambas)": "Solo se operan compras en estructura bajista (B) y ventas en alcista (A); en las laterales se operan las dos.",
+    "Corte temprano": "A los N minutos de la entrada (2 o 4) se revisa la operación: si va M ticks o más en contra (60 o 100), se sale a mercado sin esperar el SL. Si no, sigue con su SL, TP y cierre por tiempo.",
+    "Cierre condicionado": "Al llegar al cierre por tiempo (9 min), si la operación va ganando no se cierra: el SL pasa al precio de entrada y se le dan N minutos más (3, 6 o 9). Si va perdiendo, se cierra como siempre.",
+    "Breakeven": "Cuando la operación llega a +N ticks a favor (40, 60, 80 o 100), el SL pasa al precio de entrada.",
+    "SL que se acerca al cerrar cada vela": "El SL se acerca a la entrada al cierre de cada vela, en pasos iguales, hasta el cierre por tiempo.",
+    "Trailing por velas (SL al extremo de la vela que cierra a favor)": "Cada vez que una vela cierra a favor, el SL se mueve al extremo de esa vela (mínimo en compras, máximo en ventas).",
+    "Trailing por ticks": "Sin TP: al llegar a +N ticks a favor, el SL sigue al mejor precio a una distancia fija. Las combinaciones son (SL, activación, distancia).",
+    "Salir si no reacciona": "Si al cierre de la vela N la operación no llegó a un mínimo a favor, se sale a mercado. Las combinaciones son (SL, TP, vela, mínimo).",
+    "Salida parcial (2 contratos)": "Se entra con 2 contratos: uno sale en un TP corto y el otro en un TP largo, con el SL igual o en breakeven. Los resultados son por contrato.",
+    "Dos ATM a la vez (2 contratos)": "Cada señal se opera con 2 contratos: uno con el ATM más elegido de la referencia y otro con un ATM alternativo (3 pares probados), para repartir el riesgo entre dos formas de salir. Resultados por contrato.",
+    "Varias posiciones en la misma dirección": "Se permite tener más de una posición abierta a la vez si van en la misma dirección (hasta 2, hasta 3 o sin límite). En la referencia solo hay una posición a la vez.",
+    "Separación mínima entre entradas": "No se toma una entrada si la anterior fue hace menos de N minutos (2, 5 o 10).",
+    "Prioridad entre señales simultáneas": "Cuando dos señales entran a la vez y solo cabe una, se da prioridad a un tipo (Te 1 o Te 2, impulso o continuación, Buy o Sell) en vez de a la primera del registro.",
+    "Un ATM por Zona Reacción": "Cada Zona Reacción usa su propio ATM, elegido con las semanas de entrenamiento. Con solapamiento se opera una posición a la vez; sin solapamiento cada zona opera aparte (exige 2 cuentas).",
+    "Un ATM por Te": "Te 1 y Te 2 usan cada una su propio ATM, elegido con las semanas de entrenamiento.",
+    "Un ATM por estructura M (A, B, LA, LM, LP)": "Cada estructura de la columna M usa su propio ATM, elegido con las semanas de entrenamiento.",
+    "TP proporcional al ATR NY y SL fijo": "El SL es fijo y el TP se ajusta a la volatilidad: TP = factor × ATR medido desde la apertura de Nueva York.",
+    "Salir cuando confirma una señal contraria de tu registro": "Además de SL, TP y tiempo, se sale cuando confirma una señal en dirección contraria. Tiene sesgo: las señales contrarias solo están en tu registro si su orden se ejecutó.",
+    "Acortar la ventana de ejecución": "La orden pendiente se cancela antes: se acorta en 1 minuto la ventana de ejecución de Te 2 (impulso, continuación o ambas).",
+    "SL y TP medidos desde el precio de la orden (no desde el de entrada)": "El SL y el TP se calculan desde el precio de la orden pendiente y no desde el precio real de entrada, para compensar el deslizamiento.",
+    "Tamaño por riesgo: 2 contratos en días tranquilos (tercio bajo del ATR NY)": "Se operan 2 contratos cuando el ATR de Nueva York está en su tercio más bajo (días tranquilos) y 1 contrato el resto.",
+    "Stop límite": "La orden de entrada es stop límite: no se entra si el tick que la dispara salta más de N ticks (0, 1 o 2) por encima del precio de la orden.",
+    "Adaptación dentro del día: si la primera operación pierde, cambiar de ATM": "Si la primera operación del día pierde, el resto del día se opera con otro ATM (o no se opera más).",
+    "Cambiar de ATM cada semana según las 4 semanas anteriores": "Cada semana se usa el ATM que mejor funcionó en las 4 semanas anteriores (sin mirar el futuro). La primera semana no se opera.",
+    "No operar órdenes calculadas sobre el Close (13 señales)": "No se operan las señales cuya orden se calcula sobre el Close de la vela (en vez del High o el Low).",
+    "Solo señales a favor de los últimos 15 minutos": "Solo se operan las señales en la dirección del movimiento de los 15 minutos anteriores.",
+    "Solo señales contra los últimos 15 minutos": "Solo se operan las señales contra el movimiento de los 15 minutos anteriores.",
+    "Solo señales a favor del movimiento desde la apertura": "Solo se operan las señales en la dirección del movimiento del día desde la apertura.",
+    "Solo señales contra el movimiento desde la apertura": "Solo se operan las señales contra el movimiento del día desde la apertura.",
+    "Deslizamiento de entrada": "No es una decisión, es un costo: el mismo escenario de referencia con más o menos ticks de deslizamiento al entrar (0 a 6), para ver cuánto cambia el resultado.",
+    "No operar en noticias de impacto alto": "No operar los días o el rato alrededor de noticias de impacto alto (carpeta roja o 3 estrellas). No medida: falta el calendario.",
+    "Alargar la ventana de ejecución": "Dejar más tiempo la orden pendiente. No medida: faltan las señales no ejecutadas que se borraban.",
+    "Entrar a mercado o antes de la orden pendiente": "Entrar a mercado al confirmar, sin esperar el precio de la orden. No medida: faltan las señales no ejecutadas que se borraban.",
+    "ATM o filtro según la volatilidad implícita (VIX/VXN)": "Elegir el ATM o filtrar señales según el VIX/VXN. No medida: falta descargar la serie.",
+}
+_PLANTILLAS = [
+    (r"^Dejar de operar con estructura M = (\w+)$", "Quita las señales cuya estructura de mercado (columna M, que decides al ver la vela de confirmación) es {0}. El resto se opera igual que la referencia."),
+    (r"^Dejar de operar (.+)$", "Quita las señales de la Zona Reacción {0}: en todas las Te, solo en Te 1 o solo en Te 2 (por eso puede tener variantes). El resto se opera igual que la referencia: se pierden operaciones, pero no cambia cómo se ejecutan las demás."),
+    (r"^No operar el tercio de (.+) que perdió en las otras semanas$", "Divide las señales en tres partes (tercios) según {0} al momento de la señal. Con las semanas de entrenamiento busca el tercio que perdió y deja de operarlo en la semana que se mide, sin mirar el futuro."),
+    (r"^ATM según tercio de (.+)$", "Divide las señales en tres partes (tercios) según {0} y elige, con las semanas de entrenamiento, un ATM distinto para cada parte. Solo tiene Fuera de muestra: no hay una tabla de combinaciones única."),
+]
+
+
+def que_es_grupo(nombre: str) -> str | None:
+    """Explicación en lenguaje simple de la idea de un grupo (None si no hay texto para él)."""
+    if nombre in _QUE_ES:
+        return _QUE_ES[nombre]
+    for patron, texto in _PLANTILLAS:
+        m = re.match(patron, nombre)
+        if m:
+            return texto.format(*m.groups())
+    return None
+
+
+def _recorrido() -> list[tuple[str, str]]:
+    from simulador.formas_principal import _RECORRIDO  # import tardío: formas_principal importa este módulo
+    return _RECORRIDO
+
+
+def cambio_mapa(d: int, ms: int, minutos: int, zonas: str) -> dict:
+    """Pasos del Recorrido que cambia un escenario del mapa frente a la referencia."""
+    referencia = dict(_recorrido())
+    cambio = {"Calcular el precio de la orden pendiente": f'"OHLC" ± {d} ticks', "Colocación de la orden pendiente": f"00:00:00.{ms:03d}",
+              "Cierre por tiempo": f"{minutos} minutos desde la entrada"}
+    if zonas != "Todas":
+        cambio["Selección"] = zonas
+    return {k: v for k, v in cambio.items() if referencia.get(k) != v}
+
+
+def pasos_escenario(cambio: dict) -> list[tuple[str, str, bool]]:
+    """(paso, valor que usa el escenario, ¿cambia frente a la referencia?) para cada paso del Recorrido."""
+    return [(paso, cambio.get(paso, valor), paso in cambio and cambio[paso] != valor) for paso, valor in _recorrido()]
+
+
+def _orden_natural(texto: str):
+    numeros = re.findall(r"\d+(?:[.,]\d+)?", texto)
+    return (float(numeros[0].replace(",", ".")) if numeros else float("inf"), texto)
+
+
+def que_varia(cambios: list[dict]) -> str:
+    """Qué pasos del Recorrido cambian de un escenario a otro dentro de un grupo."""
+    if len(cambios) <= 1:
+        return "Un solo escenario."
+    partes = []
+    for paso, valor in _recorrido():
+        valores = sorted({c.get(paso, valor) for c in cambios}, key=_orden_natural)
+        if len(valores) > 1:
+            partes.append(f"{paso}: {' / '.join(valores[:6])}{' / …' if len(valores) > 6 else ''}")
+    return "; ".join(partes) if partes else "Sus escenarios usan el mismo Recorrido."
+
+
+def que_cambia(cambio: dict) -> str:
+    """Frase con lo que el escenario hace distinto a la referencia."""
+    partes = [f"{paso}: {valor} (referencia: {base})" for (paso, valor, cambia), (_, base) in zip(pasos_escenario(cambio), _recorrido()) if cambia]
+    return "; ".join(partes) if partes else "Nada: usa el mismo Recorrido que la referencia."
+
+
+def guia_encabezados() -> list[str]:
+    return ["Grupo", "Qué es el grupo", "Qué varía entre sus escenarios", "Escenario", "Estado", "Qué cambia frente a la referencia",
+            *[paso for paso, _ in _recorrido()], "Nota"]
+
+
+def tabla_guia(registros: list[dict], orden_grupos: list[str], avisar=print) -> list[list]:
+    """Una fila por escenario, agrupadas como en la pestaña Grupos, con el Recorrido de cada escenario."""
+    por_grupo = defaultdict(list)
+    for reg in registros:
+        por_grupo[reg["Grupo"]].append(reg)
+    filas = []
+    for nombre in orden_grupos:
+        regs = por_grupo.get(nombre, [])
+        texto = que_es_grupo(nombre)
+        if texto is None:
+            avisar(f"  Aviso: el grupo «{nombre}» no tiene explicación en la Guía; se usa un texto genérico.")
+            texto = f"Una forma de operar: {nombre}."
+        varia = que_varia([reg["_cambio"] for reg in regs])
+        for reg in regs:
+            pasos = [Resaltado(valor) if cambia else valor for _, valor, cambia in pasos_escenario(reg["_cambio"])]
+            filas.append([nombre, texto, varia, reg["Escenario"], reg["Estado"], que_cambia(reg["_cambio"]), *pasos, reg["_nota"] or None])
+    return filas
+
+
 # ---- tabla principal -------------------------------------------------------------------------------------
 
 def _nota_variante(nombre: str, colocacion: int | None, es_ref: bool) -> str:
@@ -268,12 +401,12 @@ def _motivo(nombre, ev, estado, argumento, diferencia, ref_top, colocacion=None,
     return frase
 
 
-def _fila(nombre, tipo, descripcion, ev, estado, argumento, ref_fuera, ref_top=None, colocacion=None, es_ref=False) -> dict:
+def _fila(nombre, tipo, descripcion, ev, estado, argumento, ref_fuera, ref_top=None, colocacion=None, es_ref=False, cambio=None, nota="") -> dict:
     top = ev.top if ev is not None else None
     fuera = None if ev is None else ev.fuera.neto
     diferencia = None if fuera is None else fuera - ref_fuera
     return {
-        "Escenario": nombre, "Grupo": grupo(nombre, tipo), "Tipo": tipo, "_ev": ev,
+        "Escenario": nombre, "Grupo": grupo(nombre, tipo), "Tipo": tipo, "_ev": ev, "_cambio": cambio or {}, "_nota": nota,
         "Descripción (qué cambia frente a la referencia)": descripcion,
         "Combinaciones positivas": None if top is None else _de(top["positivas"], top["combinaciones"]),
         "Combinaciones + 2 mitades": None if top is None or "ambas_todas" not in top else _de(top["ambas_todas"], top["combinaciones"]),
@@ -291,20 +424,23 @@ def _fila(nombre, tipo, descripcion, ev, estado, argumento, ref_fuera, ref_top=N
     }
 
 
-def tablas(filas, mapa, ref_fuera: float, ref_top: dict | None = None) -> list[Tabla]:
+def tablas(filas, mapa, ref_fuera: float, ref_top: dict | None = None, avisar=print) -> list[Tabla]:
     """`filas`: formas del catálogo; `mapa`: (distancia, colocación, minutos, zonas, evaluación, estado, argumento)."""
     registros = []
     for f in filas:
         descripcion = "; ".join(f"{k}: {v}" for k, v in f.cambio.items()) or _REFERENCIA
-        registros.append(_fila(f.forma, "Forma de operar", descripcion, f.ev, f.estado, f.argumento, ref_fuera, ref_top))
+        nota = f.nota if f.estado != NO_MEDIDA else (f.nota or f.argumento)
+        registros.append(_fila(f.forma, "Forma de operar", descripcion, f.ev, f.estado, f.argumento, ref_fuera, ref_top, cambio=f.cambio, nota=nota))
     for d, ms, minutos, zonas, ev, estado, argumento in mapa:
         nombre = f"Mapa: ±{d} ticks · {ms} ms · {minutos} min · {zonas}"
         descripcion = f"Orden a ±{d} ticks, colocación en {ms} ms, cierre a {minutos} min, zonas: {zonas}"
         es_ref = (d, ms, minutos, zonas) == (REF[0], REF[1], REF[3], "Todas")
-        registros.append(_fila(nombre, "Mapa de reglas", descripcion + (" (igual que la referencia)" if es_ref else ""), ev, estado, argumento, ref_fuera, ref_top, ms, es_ref))
+        registros.append(_fila(nombre, "Mapa de reglas", descripcion + (" (igual que la referencia)" if es_ref else ""), ev, estado, argumento, ref_fuera, ref_top, ms, es_ref,
+                                cambio=cambio_mapa(d, ms, minutos, zonas)))
     registros.sort(key=lambda r: r["_orden"])
     filas_tabla = [[i, *[r[k] for k in ENCABEZADOS[1:]]] for i, r in enumerate(registros, 1)]
     filas_grupos, filas_utilizables, nombres_meses = tabla_grupos(registros)
+    filas_guia = tabla_guia(registros, [f[0] for f in filas_grupos], avisar)
     ideas_candidatas = sum(1 for f in filas_grupos if f[2])
     cuenta = {e: sum(r["Estado"] == e for r in registros) for e in ESTADOS}
     como_leer = Tabla("Cómo leer el resumen", ["Columna", "Qué significa"], [
@@ -332,8 +468,10 @@ def tablas(filas, mapa, ref_fuera: float, ref_top: dict | None = None) -> list[T
         ["Combinación de referencia del grupo", "De las utilizables, la de mayor neto mínimo entre los escenarios del grupo (la que mejor aguanta en su peor escenario), con cuántas de sus vecinas en la cuadrícula SL × TP también son utilizables: si son todas, está en el centro de la zona y no en un borde."],
         ["Elecciones fuera de muestra dentro de la zona", "Prueba de honestidad: de las combinaciones que el método eligió sin ver cada semana (14 por escenario candidato), cuántas caen dentro de la zona utilizable. Si casi todas caen dentro, la zona es la que se elige también sin mirar el resultado."],
         ["Pestaña Combinaciones utilizables", "Una fila por combinación utilizable y escenario candidato de su grupo, con los resultados de ESE escenario: las columnas del entregable (Ganancia Neta, Profit Factor, Drawdown…), las dos mitades y cada mes. Una combinación se repite en cada escenario candidato de su grupo (columnas Grupo y Escenario). Orden: por grupo (como en la pestaña Grupos), por escenario (Fuera de muestra de mayor a menor) y por Ganancia Neta. Filtra por SL y TP para ver una combinación en todos los escenarios de su grupo."],
+        ["Pestaña Guía de grupos y escenarios", "Para saber qué es un grupo o cómo se midió un escenario, busca su nombre en esta pestaña (es el mismo nombre de las otras). Cada fila dice qué es su grupo, qué varía dentro del grupo, qué cambia frente a la referencia y el valor de cada paso de tu Recorrido; los pasos que cambian van en amarillo."],
         ["Límite", "Una meseta o una zona es un argumento de robustez a los parámetros con los mismos datos (703 señales, 14 semanas). No prueba que la idea funcione en semanas nuevas."],
         ["Celdas vacías", "Las formas que eligen un ATM por grupo, por semana o dentro del día no tienen una tabla de combinaciones: solo tienen Fuera de muestra. Las No Medida no tienen números."],
     ])
     return [Tabla("Resumen escenarios", ENCABEZADOS, filas_tabla), Tabla("Grupos", GRUPOS_ENCABEZADOS, filas_grupos),
-            Tabla("Combinaciones utilizables", utilizables_encabezados(nombres_meses), filas_utilizables), como_leer]
+            Tabla("Combinaciones utilizables", utilizables_encabezados(nombres_meses), filas_utilizables),
+            Tabla("Guía de grupos y escenarios", guia_encabezados(), filas_guia), como_leer]

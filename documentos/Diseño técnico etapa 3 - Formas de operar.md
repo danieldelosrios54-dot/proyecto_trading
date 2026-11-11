@@ -246,6 +246,15 @@ Muchas filas del resumen son variantes de la misma idea (mesetas). Para contar *
 
 Va ordenada por grupo (como en la pestaña Grupos), luego por escenario (Fuera de muestra de mayor a menor) y luego por Ganancia Neta. Para ver una combinación en todos los escenarios de su grupo, se filtra por SL y TP.
 
+**Pestaña "Guía de grupos y escenarios":** una fila por escenario (los 325), en el orden de la pestaña Grupos. Sirve para consultar qué es un grupo y cómo se midió un escenario. El nombre del escenario es el mismo de las otras pestañas, así que se busca con el filtro. Columnas:
+- **Grupo** y **Qué es el grupo:** la idea en lenguaje simple. Un texto propio por idea, o una plantilla para "Dejar de operar X", "Dejar de operar con estructura M = X", "No operar el tercio de …" y "ATM según tercio de …".
+- **Qué varía entre sus escenarios:** se calcula comparando sus Recorridos.
+- **Escenario, Estado** y **Qué cambia frente a la referencia**.
+- **Los 17 pasos del Recorrido** (`_RECORRIDO`) con el valor que usa el escenario. Los pasos que cambian frente a la referencia van **en amarillo**.
+- **Nota:** sesgo, 2 contratos, 2 cuentas o dato faltante.
+
+Los pasos salen de `Fila.cambio` (formas) y de `cambio_mapa` (mapa), los mismos valores con que se midió. Si un grupo nuevo no tiene texto, se usa uno genérico y se avisa en la consola.
+
 **Límite:** una meseta o una zona es un argumento de robustez a los parámetros con los mismos datos. No prueba que la idea funcione en semanas nuevas.
 
 **Código:**
@@ -254,4 +263,6 @@ Va ordenada por grupo (como en la pestaña Grupos), luego por escenario (Fuera d
 - `formas.consistente` marca las combinaciones que ganan en el total, en las mitades y en cada mes de un escenario.
 - `_columnas_consistentes` guarda las columnas del entregable solo de esas combinaciones. Solo ellas pueden ser utilizables, así que se ahorra memoria. Revision Invalida y No Ejecutadas salen de las mediciones de cada escenario.
 - `resumen_escenarios.grupo`, `utilizables` y `tabla_grupos` arman las pestañas.
-- Pruebas en `tests/test_grupos.py`.
+- La Guía se arma con `resumen_escenarios.que_es_grupo`, `cambio_mapa`, `pasos_escenario`, `que_varia`, `que_cambia` y `tabla_guia`.
+- `reportes.Resaltado` marca los textos que se escriben en amarillo.
+- Pruebas en `tests/test_grupos.py` y `tests/test_guia.py`.

@@ -35,6 +35,11 @@ def limpiar(valor):
 
 _VERDE = PatternFill("solid", fgColor="C6EFCE")
 _ROJO = PatternFill("solid", fgColor="FFC7CE")
+_AMARILLO = PatternFill("solid", fgColor="FFEB9C")
+
+
+class Resaltado(str):
+    """Texto que se escribe con fondo amarillo (por ejemplo, un paso que cambia frente a la referencia)."""
 
 
 def _hoja(libro: Workbook, tabla: Tabla, colores: set[str] = frozenset()) -> None:
@@ -56,6 +61,11 @@ def _hoja(libro: Workbook, tabla: Tabla, colores: set[str] = frozenset()) -> Non
     for fila in tabla.filas:
         salida = []
         for valor, formato, color in zip(fila, formatos, colorear):
+            if isinstance(valor, Resaltado):
+                celda = WriteOnlyCell(hoja, str(valor))
+                celda.fill = _AMARILLO
+                salida.append(celda)
+                continue
             valor = limpiar(valor)
             pinta = color and isinstance(valor, (int, float)) and not isinstance(valor, bool) and valor != 0
             if (formato or pinta) and valor is not None:
