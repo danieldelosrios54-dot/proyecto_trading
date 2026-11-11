@@ -140,6 +140,18 @@ ESCENARIOS_PRINCIPAL = ((1, 3, 200, 3, 9), (2, 7, 200, 3, 9), (3, 3, 600, 3, 9),
 ATM_REFERENCIA = (185, 125)  # SL y TP en ticks
 CANDIDATAS_MAX = 30
 
+# Documento 5: todas las formas de operar
+CARPETA_FORMAS = RAIZ / "salida" / "formas"
+REPORTE_FORMAS = CARPETA_FORMAS / "analisis_formas.xlsx"
+REPORTE_PROPUESTA_MATRIZ = CARPETA_FORMAS / "propuesta_matriz.xlsx"
+REPORTE_RESUMEN_ESCENARIOS = CARPETA_FORMAS / "resumen_escenarios.xlsx"
+CALENDARIO_NOTICIAS = RAIZ / "entrada" / "calendario_noticias.csv"
+ESCENARIO_FORMAS = (3, 200, 3, 9)  # referencia: distancia, colocación ms, deslizamiento, cierre en minutos
+FORMAS_DISTANCIAS = (3, 4, 5, 6, 7)
+FORMAS_COLOCACION = (100, 200, 300, 600)
+FORMAS_CIERRES = (7, 8, 9, 10, 11)
+FORMAS_AZAR = 100
+
 # Validación
 AZAR_CARTERAS = 100
 AGRUPACIONES_FALSAS = 100

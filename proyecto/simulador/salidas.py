@@ -15,6 +15,10 @@ GRID = np.array(config.SIM_TICKS, dtype=np.int64)
 _EXCESO = config.TP_EXCESO_TICKS
 _DESLIZ = config.SALIDA_DESLIZ_TICKS
 
+# Con True, toda salida por stop (SL, breakeven, trailing) registra el precio del stop − 2 ticks,
+# como en el entregable principal. Con False, el precio del tick que lo dispara − 2 (simulador anterior).
+SL_AL_PRECIO = False
+
 
 def usd(ticks: np.ndarray | float) -> np.ndarray | float:
     return ticks * config.USD_POR_TICK - config.COMISION_USD
@@ -27,6 +31,10 @@ def _primeros(op: Operacion, sl: np.ndarray, tp: np.ndarray) -> tuple[np.ndarray
 
 def _valor_en(op: Operacion, indices: np.ndarray) -> np.ndarray:
     return op.favor[np.minimum(indices, len(op.favor) - 1)] - _DESLIZ
+
+
+def _stop_fijo(op: Operacion, a: np.ndarray, sl: np.ndarray) -> np.ndarray:
+    return (-sl - _DESLIZ) if SL_AL_PRECIO else _valor_en(op, a)
 
 
 def _combinar(op: Operacion, c: int, a: np.ndarray, b: np.ndarray, tp: np.ndarray, valor_stop: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -43,7 +51,7 @@ def fijo(op: Operacion, velas: int, sl: np.ndarray = GRID, tp: np.ndarray = GRID
     """Matrices SL × TP."""
     a, b = _primeros(op, sl, tp)
     c = op.cierre(velas)
-    return _combinar(op, c, a[:, None], b[None, :], tp, _valor_en(op, a)[:, None])
+    return _combinar(op, c, a[:, None], b[None, :], tp, _stop_fijo(op, a, sl)[:, None])
 
 
 def fijo_minutos(op: Operacion, minutos: float, sl: np.ndarray = GRID, tp: np.ndarray = GRID) -> tuple[np.ndarray, np.ndarray]:
@@ -65,7 +73,7 @@ def breakeven(op: Operacion, velas: int, nivel: int, sl: np.ndarray = GRID, tp: 
     """Al llegar a +nivel, el SL pasa al precio de entrada. Devuelve también qué celdas cerraron en breakeven."""
     a, b = _primeros(op, sl, tp)
     c = op.cierre(velas)
-    valor, indice = _combinar(op, c, a[:, None], b[None, :], tp, _valor_en(op, a)[:, None])
+    valor, indice = _combinar(op, c, a[:, None], b[None, :], tp, _stop_fijo(op, a, sl)[:, None])
     activa = int(np.searchsorted(op.maximo, nivel, side="left"))
     vuelta = _vuelta_a_entrada(op, activa)
     a_c, b_f = a[:, None], b[None, :]
@@ -73,7 +81,8 @@ def breakeven(op: Operacion, velas: int, nivel: int, sl: np.ndarray = GRID, tp: 
     cierra_be = con_be & (vuelta < b_f) & (vuelta < c)
     tp_tras_be = con_be & (b_f < vuelta) & (b_f < c)
     tiempo = int(op.favor[c]) - _DESLIZ
-    valor_be = np.where(cierra_be, int(op.favor[min(vuelta, len(op.favor) - 1)]) - _DESLIZ, np.where(tp_tras_be, tp[None, :], tiempo))
+    valor_vuelta = -_DESLIZ if SL_AL_PRECIO else int(op.favor[min(vuelta, len(op.favor) - 1)]) - _DESLIZ
+    valor_be = np.where(cierra_be, valor_vuelta, np.where(tp_tras_be, tp[None, :], tiempo))
     indice_be = np.where(cierra_be, vuelta, np.where(tp_tras_be, b_f, c))
     return np.where(con_be, valor_be, valor), np.where(con_be, indice_be, indice), cierra_be
 
@@ -87,17 +96,22 @@ def sl_tiempo(op: Operacion, velas: int, sl: np.ndarray = GRID, tp: np.ndarray =
     """El SL se acerca al cerrar cada vela: con SL 180 y 6 velas pasa a 150, 120, 90, 60 y 30."""
     _, b = _primeros(op, sl, tp)
     c = op.cierre(velas)
+    n = op.velas_hasta_cierre(velas)
     a = np.full(len(sl), len(op.favor), dtype=np.int64)
-    for cerradas in range(velas):
+    nivel = np.zeros(len(sl), dtype=np.int64)
+    for cerradas in range(n):
         ini = 0 if cerradas == 0 else int(op.cierres[cerradas - 1])
         fin = int(op.cierres[cerradas])
         if fin <= ini:
             continue
         peor = -np.minimum.accumulate(op.favor[ini:fin])
-        pos = np.searchsorted(peor, niveles_sl_tiempo(sl, velas, cerradas), side="left")
+        niveles = niveles_sl_tiempo(sl, n, cerradas)
+        pos = np.searchsorted(peor, niveles, side="left")
         nuevo = (pos < fin - ini) & (a == len(op.favor))
         a = np.where(nuevo, ini + pos, a)
-    return _combinar(op, c, a[:, None], b[None, :], tp, _valor_en(op, a)[:, None])
+        nivel = np.where(nuevo, niveles, nivel)
+    valor_stop = (-nivel - _DESLIZ) if SL_AL_PRECIO else _valor_en(op, a)
+    return _combinar(op, c, a[:, None], b[None, :], tp, valor_stop[:, None])
 
 
 # ---- Otras salidas, con parámetros gruesos -------------------------------------------------
@@ -106,8 +120,11 @@ def _primer(arr: np.ndarray, umbral: float) -> int:
     return int(np.searchsorted(arr, umbral, side="left"))
 
 
-def _stop_o_tiempo(op: Operacion, a: int, c: int) -> tuple[float, int]:
+def _stop_o_tiempo(op: Operacion, a: int, c: int, nivel: float | None = None) -> tuple[float, int]:
+    """`nivel`: precio del stop en ticks a favor (negativo para un SL); se usa si SL_AL_PRECIO."""
     if a < c:
+        if SL_AL_PRECIO and nivel is not None:
+            return float(nivel - _DESLIZ), a
         return float(op.favor[a] - _DESLIZ), a
     return float(op.favor[c] - _DESLIZ), c
 
@@ -129,10 +146,10 @@ def parcial(op: Operacion, velas: int) -> tuple[list[float], list[int], list[str
                         if b2 < j and b2 < c:
                             segundo, q = float(tp2), b2
                         else:
-                            segundo, q = _stop_o_tiempo(op, j, c)
+                            segundo, q = _stop_o_tiempo(op, j, c, 0 if modo == "breakeven" else -sl)
                         valor = (tp1 + segundo) / 2
                     else:
-                        valor, q = _stop_o_tiempo(op, a, c)
+                        valor, q = _stop_o_tiempo(op, a, c, -sl)
                     valores.append(valor)
                     indices.append(q)
                     nombres.append(f"SL {sl} · TP1 {tp1} · TP2 {tp2} · {modo}")
@@ -152,7 +169,8 @@ def trailing(op: Operacion, velas: int) -> tuple[list[float], list[int], list[st
                 if ia < len(op.favor):
                     toca = np.flatnonzero(op.favor[ia:] <= op.maximo[ia:] - distancia)
                     t = ia + int(toca[0]) if toca.size else t
-                valor, q = _stop_o_tiempo(op, min(a, t), c)
+                nivel = float(op.maximo[t] - distancia) if t < a and t < len(op.favor) else -sl
+                valor, q = _stop_o_tiempo(op, min(a, t), c, nivel)
                 valores.append(valor)
                 indices.append(q)
                 nombres.append(f"SL {sl} · activa +{activa} · distancia {distancia}")
@@ -163,7 +181,7 @@ def cierre_de_vela(op: Operacion, velas: int) -> tuple[list[float], list[int], l
     """El SL solo se mira al cierre de cada vela; un stop de catástrofe protege dentro de la vela."""
     c = op.cierre(velas)
     valores, indices, nombres = [], [], []
-    cierres_previos = [int(op.cierres[j - 1]) for j in range(1, velas)]
+    cierres_previos = [int(op.cierres[j - 1]) for j in range(1, op.velas_hasta_cierre(velas)) if int(op.cierres[j - 1]) < c]
     for stop in config.CIERRE_VELA_STOP:
         salida_vela = next((q for q in cierres_previos if op.favor[q - 1] <= -stop), len(op.favor))
         for catastrofe in config.CIERRE_VELA_CATASTROFE:
@@ -175,6 +193,8 @@ def cierre_de_vela(op: Operacion, velas: int) -> tuple[list[float], list[int], l
                     valor, q = float(op.favor[c] - _DESLIZ), c
                 elif primero == b:
                     valor, q = float(tp), b
+                elif primero == a and SL_AL_PRECIO:
+                    valor, q = float(-catastrofe - _DESLIZ), primero
                 else:
                     valor, q = float(op.favor[primero] - _DESLIZ), primero
                 valores.append(valor)
@@ -192,7 +212,7 @@ def sin_reaccion(op: Operacion, velas: int) -> tuple[list[float], list[int], lis
         for tp in config.REACCION_TP:
             b = _primer(op.maximo, tp + _EXCESO)
             for vela in config.REACCION_VELA:
-                if vela >= velas:
+                if vela >= op.velas_hasta_cierre(velas):
                     continue
                 q_vela = int(op.cierres[vela - 1])
                 for minimo in config.REACCION_MINIMO:
@@ -202,7 +222,7 @@ def sin_reaccion(op: Operacion, velas: int) -> tuple[list[float], list[int], lis
                     elif b < a and b < c:
                         valor, q = float(tp), b
                     else:
-                        valor, q = _stop_o_tiempo(op, a, c)
+                        valor, q = _stop_o_tiempo(op, a, c, -sl)
                     valores.append(valor)
                     indices.append(q)
                     nombres.append(f"SL {sl} · TP {tp} · revisa vela {vela} · mínimo +{minimo}")

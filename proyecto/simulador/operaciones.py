@@ -14,6 +14,10 @@ from medicion.entrada import Dia
 _NS_MINUTO = 60_000_000_000
 
 
+class Minutos(float):
+    """Cierre por tiempo medido en minutos desde la entrada (en lugar de velas)."""
+
+
 @dataclass(frozen=True)
 class Operacion:
     fila: int  # posición de la señal en la lista de señales
@@ -34,9 +38,18 @@ class Operacion:
         object.__setattr__(self, "maximo", np.maximum.accumulate(self.favor))
         object.__setattr__(self, "contra", -np.minimum.accumulate(self.favor))
 
-    def cierre(self, velas: int) -> int:
-        """Índice del tick que cierra por tiempo tras `velas` velas."""
+    def cierre(self, velas: "int | Minutos") -> int:
+        """Índice del tick que cierra por tiempo: tras `velas` velas, o tras X minutos si es `Minutos`."""
+        if isinstance(velas, Minutos):
+            return self.cierre_minutos(float(velas))
         return int(self.cierres[velas - 1])
+
+    def velas_hasta_cierre(self, regla: "int | Minutos") -> int:
+        """Velas que se cierran hasta el cierre por tiempo (incluida la del cierre)."""
+        if not isinstance(regla, Minutos):
+            return int(regla)
+        c = self.cierre(regla)
+        return int((self.cierres < c).sum()) + 1
 
     def cierre_minutos(self, minutos: float) -> int:
         """Índice del primer tick en o después de la entrada + `minutos`."""

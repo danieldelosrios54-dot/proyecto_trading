@@ -270,6 +270,47 @@ def principal() -> int:
     return 0
 
 
+def formas() -> int:
+    import medicion.entrada as entrada
+    from simulador.formas_principal import ejecutar_formas
+
+    inicio = time.time()
+    try:
+        d, ms, desl, _ = config.ESCENARIO_FORMAS
+        p = _preparar([Escenario(1, d, ms, desl, config.LIMITE_REENTRADA_PRINCIPAL)])
+        bases = {}
+        for s in p.validacion.senales:
+            clave = clave_fecha(s.fecha) if s.fecha else None
+            apta = clave in p.dias and s.hora_utc_s is not None and s.vela_op_utc_s is not None and s.te in config.VALORES_TE and s.ohlc in config.VALORES_OHLC
+            bases[s.fila] = precio_base_y_cierre(s, p.dias[clave]) if apta else None
+        corta = config.ZONAS_PRIMERA_VELA | config.ZONAS_IMPULSO
+        original = entrada._velas_ejecucion
+
+        def medir(escenario: Escenario, ventanas: dict | None = None) -> list[Medicion]:
+            """Entradas de un escenario; `ventanas` cambia los minutos de la ventana por (zona de 1 vela, Te)."""
+            if ventanas:
+                def velas(s):
+                    minutos = ventanas.get((s.zona in corta, s.te), original(s) * s.te)
+                    return minutos / s.te
+                entrada._velas_ejecucion = velas
+            try:
+                return [_medir_senal(s, bases[s.fila], p.validacion, p.dias, escenario) for s in p.validacion.senales]
+            finally:
+                entrada._velas_ejecucion = original
+
+        print("\nMidiendo todas las formas de operar (documento 5)...")
+        atr_ny = {fila: ctx.atr_senal for fila, ctx in p.contexto.items()}
+        resumen = ejecutar_formas(p.validacion.senales, p.por_escenario[1], p.dias, medir, atr_ny)
+    except PermissionError as error:
+        print(f"\nNo se pudo guardar: {error.filename}\nCiérralo en Excel y vuelve a ejecutar.")
+        return 1
+    print(f"\nListo en {time.time() - inicio:.0f} s")
+    for clave, valor in resumen.items():
+        print(f"{clave}: {valor}")
+    print(f"Archivos en: {config.CARPETA_FORMAS}")
+    return 0
+
+
 def validar() -> int:
     inicio = time.time()
     try:
@@ -281,10 +322,24 @@ def validar() -> int:
     return 0
 
 
-COMANDOS = {"validar": validar, "medir": medir, "simular": simular, "principal": principal}
+def recomendada() -> int:
+    """Rehace la pestaña Matriz recomendada con el catálogo ya medido (sin volver a medir)."""
+    from simulador.matriz_recomendada import escribir
+
+    try:
+        escenarios = escribir()
+    except PermissionError as error:
+        print(f"\nNo se pudo guardar: {error.filename}\nCiérralo en Excel y vuelve a ejecutar.")
+        return 1
+    print("Matriz recomendada:", ", ".join(escenarios))
+    print(f"Archivo: {config.REPORTE_PROPUESTA_MATRIZ}")
+    return 0
+
+
+COMANDOS = {"validar": validar, "medir": medir, "simular": simular, "principal": principal, "formas": formas, "recomendada": recomendada}
 
 if __name__ == "__main__":
     if len(sys.argv) != 2 or sys.argv[1] not in COMANDOS:
-        print("Uso: python main.py validar | medir | simular | principal")
+        print("Uso: python main.py validar | medir | simular | principal | formas | recomendada")
         sys.exit(2)
     sys.exit(COMANDOS[sys.argv[1]]())
